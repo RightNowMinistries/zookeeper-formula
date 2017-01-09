@@ -1,6 +1,5 @@
-{%- if 'zookeeper' in salt['grains.get']('roles', []) %}
-{%- from 'zookeeper/settings.sls' import zk with context %}
-{%- from "zookeeper/map.jinja" import zookeeper_map with context %}
+{%- from 'zookeeper/map.jinja' import zookeeper_map with context -%}
+{%- from 'zookeeper/settings.sls' import zk with context -%}
 
 include:
   - zookeeper
@@ -45,6 +44,8 @@ zoo-cfg:
     - template: jinja
     - context:
       port: {{ zk.port }}
+      quorum_port: {{ zk.quorum_port }}
+      election_port: {{ zk.election_port }}
       bind_address: {{ zk.bind_address }}
       data_dir: {{ zk.data_dir }}
       snap_count: {{ zk.snap_count }}
@@ -53,13 +54,56 @@ zoo-cfg:
       max_client_cnxns: {{ zk.max_client_cnxns }}
       zookeepers: {{ zk.zookeepers_with_ids }}
 
-
 {{ zk.myid_path }}:
   file.managed:
     - user: zookeeper
     - group: zookeeper
     - contents: |
         {{ zk.myid }}
+
+{%- if zk.process_control_system is defined %}
+{%- if zk.restart_on_change %}
+zookeeper-in-supervisord:
+  cmd.run:
+    - name: "{{ zk.pcs_restart_command }}"
+    - require:
+      - pkg: {{ zk.process_control_system }}
+    - onchanges:
+       - file: {{ zk.real_config }}/zoo.cfg
+{% endif %}
+{%- else %}
+
+{%- if grains.get('systemd') %}
+{{ zk.real_config }}/zookeeper.env:
+  file.managed:
+    - source: salt://zookeeper/conf/zookeeper.env
+    - user: root
+    - group: root
+    - mode: 755
+    - template: jinja
+    - context:
+      java_home: {{ zk.java_home }}
+      jmx_port: {{ zk.jmx_port }}
+      initial_heap_size: {{ zk.initial_heap_size }}
+      max_heap_size: {{ zk.max_heap_size }}
+      max_perm_size: {{ zk.max_perm_size }}
+      jvm_opts: {{ zk.jvm_opts }}
+      log_level: {{ zk.log_level }}
+
+{{ zk.systemd_script }}:
+  file.managed:
+    - source: salt://zookeeper/conf/zookeeper.service
+    - user: root
+    - group: root
+    - mode: 644
+    - template: jinja
+    - context:
+      alt_home: {{ zk.alt_home }}
+  module.wait:
+    - name: service.systemctl_reload
+    - watch:
+      - file: {{ zk.systemd_script }}
+{%- else %}
 
 {{ zk.real_config }}/zookeeper-env.sh:
   file.managed:
@@ -87,7 +131,10 @@ zoo-cfg:
     - template: jinja
     - context:
       alt_home: {{ zk.alt_home }}
+{%- endif %}
+{%- endif %}
 
+{% if zk.restart_on_change %}
 zookeeper-service:
   service.running:
     - name: zookeeper
@@ -96,5 +143,5 @@ zookeeper-service:
       - file: {{ zk.data_dir }}
     - watch:
       - file: zoo-cfg
-{%- endif %}
-{%- endif %}
+{% endif %}
+{% endif %}
